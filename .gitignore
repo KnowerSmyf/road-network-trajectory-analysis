@@ -1,2 +1,25 @@
-implementation/*
+# Environment and credentials
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Large source and generated datasets
+data/raw/*
+!data/raw/taxi/
+data/raw/taxi/*
+!data/raw/taxi/.gitkeep
+
+data/interim/*
+!data/interim/.gitkeep
+
+# PostgreSQL dumps
+*.dump
+
+archive/*
+
+# macOS
 .DS_Store
