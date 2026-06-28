@@ -7,6 +7,7 @@ TAXI_OUTER_ARCHIVE := $(TAXI_DATA_DIR)/taxi_dataset.zip
 TAXI_INNER_ARCHIVE := $(TAXI_DATA_DIR)/train.csv.zip
 TAXI_SAMPLE_PATH := data/interim/taxi_trips_sample.csv
 TAXI_SAMPLE_SIZE := 1000
+CORE_TRIP_SAMPLE_PATH := data/interim/core_trip_sample.geojson
 
 .PHONY: \
 	help \
@@ -22,7 +23,12 @@ TAXI_SAMPLE_SIZE := 1000
 	validate-taxi-staging \
 	test-taxi-staging \
 	profile-taxi-staging \
-	check-taxi-staging
+	check-taxi-staging \
+	build-core-trips \
+	inspect-core-trips \
+	test-core-trips \
+	export-core-trip-sample \
+	check-core-trips
 
 help:
 	@echo "Available commands:"
@@ -39,6 +45,11 @@ help:
 	@echo "  make test-taxi-staging      Run staging assertions"
 	@echo "  make profile-taxi-staging   Print staging data profile"
 	@echo "  make check-taxi-staging     Run the full sample staging workflow"
+	@echo "  make build-core-trips        Build canonical PostGIS trajectories"
+	@echo "  make inspect-core-trips      Print a sample of canonical trips"
+	@echo "  make test-core-trips         Run canonical trip assertions"
+	@echo "  make export-core-trip-sample Export sample trajectories as GeoJSON"
+	@echo "  make check-core-trips        Run the full canonical-trip workflow"
 
 db-up:
 	docker compose up -d
@@ -168,3 +179,55 @@ check-taxi-staging: \
 	test-taxi-staging \
 	profile-taxi-staging
 	@echo "Taxi staging workflow completed successfully."
+
+build-core-trips:
+	docker compose exec -T db \
+		psql \
+		-v ON_ERROR_STOP=1 \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		< sql/pipeline/004_build_core_trips.sql
+
+	@echo "Core trip summary:"
+	@docker compose exec -T db \
+		psql \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		-c "SELECT count(*) AS accepted_trips, min(point_count) AS minimum_points, round(avg(point_count), 2) AS average_points, max(point_count) AS maximum_points FROM core.trips;"
+
+inspect-core-trips:
+	docker compose exec -T db \
+		psql \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		-c "SELECT trip_id, taxi_id, started_at, point_count, ST_GeometryType(geom) AS geometry_type, ST_AsText(ST_StartPoint(geom)) AS start_point, ST_AsText(ST_EndPoint(geom)) AS end_point FROM core.trips ORDER BY started_at LIMIT 10;"
+
+test-core-trips:
+	docker compose exec -T db \
+		psql \
+		-v ON_ERROR_STOP=1 \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		< tests/sql/core_trips_assertions.sql
+	@echo "Core trip tests passed."
+
+export-core-trip-sample:
+	mkdir -p data/interim
+	docker compose exec -T db \
+		psql \
+		-v ON_ERROR_STOP=1 \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		< sql/exploration/export_core_trip_sample.sql \
+		> $(CORE_TRIP_SAMPLE_PATH)
+	@python3 -m json.tool $(CORE_TRIP_SAMPLE_PATH) > /dev/null
+	@echo "Exported $(CORE_TRIP_SAMPLE_PATH)"
+	@echo "Open this file in a GeoJSON viewer to inspect the trajectories."
+
+check-core-trips:
+	$(MAKE) check-taxi-staging
+	$(MAKE) build-core-trips
+	$(MAKE) test-core-trips
+	$(MAKE) inspect-core-trips
+	$(MAKE) export-core-trip-sample
+	@echo "Canonical trip workflow completed successfully."
