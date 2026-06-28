@@ -13,9 +13,13 @@ CREATE TABLE staging.taxi_trips_raw (
 );
 
 CREATE TABLE staging.trip_rejections (
-    trip_id bigint NOT NULL,
+    rejection_id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    ingestion_id bigint NOT NULL
+        REFERENCES staging.taxi_trips_raw(ingestion_id)
+        ON DELETE CASCADE,
+    trip_id bigint,
     reason text NOT NULL,
     details jsonb,
     rejected_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (trip_id, reason)
+    UNIQUE (ingestion_id, reason)
 );

@@ -5,8 +5,40 @@ endif
 
 TAXI_OUTER_ARCHIVE := $(TAXI_DATA_DIR)/taxi_dataset.zip
 TAXI_INNER_ARCHIVE := $(TAXI_DATA_DIR)/train.csv.zip
+TAXI_SAMPLE_PATH := data/interim/taxi_trips_sample.csv
+TAXI_SAMPLE_SIZE := 1000
 
-.PHONY: db-up db-down db-status db-shell db-init prepare-taxi-data load-taxi-sample
+.PHONY: \
+	help \
+	db-up \
+	db-down \
+	db-status \
+	db-shell \
+	db-init \
+	prepare-taxi-data \
+	create-taxi-tables \
+	create-taxi-sample \
+	load-taxi-sample \
+	validate-taxi-staging \
+	test-taxi-staging \
+	profile-taxi-staging \
+	check-taxi-staging
+
+help:
+	@echo "Available commands:"
+	@echo "  make db-up                  Start the database"
+	@echo "  make db-down                Stop the database"
+	@echo "  make db-status              Show database container status"
+	@echo "  make db-shell               Open a PostgreSQL shell"
+	@echo "  make db-init                Create extensions and schemas"
+	@echo "  make prepare-taxi-data      Download and extract the taxi dataset"
+	@echo "  make create-taxi-tables     Create taxi staging tables"
+	@echo "  make create-taxi-sample     Create a local sample CSV"
+	@echo "  make load-taxi-sample       Load the sample into staging"
+	@echo "  make validate-taxi-staging  Populate trip rejection records"
+	@echo "  make test-taxi-staging      Run staging assertions"
+	@echo "  make profile-taxi-staging   Print staging data profile"
+	@echo "  make check-taxi-staging     Run the full sample staging workflow"
 
 db-up:
 	docker compose up -d
@@ -19,7 +51,9 @@ db-status:
 
 db-shell:
 	docker compose exec db \
-		psql -U $(POSTGRES_USER) -d $(POSTGRES_DB)
+		psql \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB)
 
 db-init:
 	docker compose exec -T db \
@@ -56,10 +90,13 @@ prepare-taxi-data:
 	@wc -l $(TAXI_DATA_PATH)
 	@head -n 1 $(TAXI_DATA_PATH)
 
-TAXI_SAMPLE_PATH := data/interim/taxi_trips_sample.csv
-TAXI_SAMPLE_SIZE := 1000
-
-.PHONY: create-taxi-sample
+create-taxi-tables:
+	docker compose exec -T db \
+		psql \
+		-v ON_ERROR_STOP=1 \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		< sql/pipeline/002_create_taxi_tables.sql
 
 create-taxi-sample:
 	mkdir -p data/interim
@@ -68,8 +105,6 @@ create-taxi-sample:
 	@test "$$(wc -l < $(TAXI_SAMPLE_PATH) | tr -d ' ')" \
 		-eq "$$(( $(TAXI_SAMPLE_SIZE) + 1 ))"
 	@echo "Created $(TAXI_SAMPLE_SIZE)-row sample at $(TAXI_SAMPLE_PATH)"
-
-.PHONY: load-taxi-sample
 
 load-taxi-sample: create-taxi-sample
 	docker compose exec -T db \
@@ -94,17 +129,20 @@ load-taxi-sample: create-taxi-sample
 		-d $(POSTGRES_DB) \
 		-tAc "SELECT count(*) FROM staging.taxi_trips_raw;"
 
-.PHONY: profile-taxi-staging
-
-profile-taxi-staging:
+validate-taxi-staging:
 	docker compose exec -T db \
 		psql \
 		-v ON_ERROR_STOP=1 \
 		-U $(POSTGRES_USER) \
 		-d $(POSTGRES_DB) \
-		< sql/exploration/taxi_staging_profile.sql
+		< sql/pipeline/003_validate_taxi_staging.sql
 
-.PHONY: test-taxi-staging
+	@echo "Taxi validation summary:"
+	@docker compose exec -T db \
+		psql \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		-c "SELECT reason, count(*) AS rejected_rows FROM staging.trip_rejections GROUP BY reason ORDER BY reason;"
 
 test-taxi-staging:
 	docker compose exec -T db \
@@ -115,6 +153,18 @@ test-taxi-staging:
 		< tests/sql/taxi_staging_assertions.sql
 	@echo "Taxi staging tests passed."
 
-.PHONY: check-taxi-staging
+profile-taxi-staging:
+	docker compose exec -T db \
+		psql \
+		-v ON_ERROR_STOP=1 \
+		-U $(POSTGRES_USER) \
+		-d $(POSTGRES_DB) \
+		< sql/exploration/taxi_staging_profile.sql
 
-check-taxi-staging: load-taxi-sample test-taxi-staging profile-taxi-staging
+check-taxi-staging: \
+	create-taxi-tables \
+	load-taxi-sample \
+	validate-taxi-staging \
+	test-taxi-staging \
+	profile-taxi-staging
+	@echo "Taxi staging workflow completed successfully."
