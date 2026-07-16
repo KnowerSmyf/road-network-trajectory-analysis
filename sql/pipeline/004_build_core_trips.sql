@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS core.trips (
         CHECK (point_count >= 2)
 );
 
+DROP INDEX IF EXISTS core.trips_geom_gix;
+
 TRUNCATE TABLE core.trips;
 
 WITH accepted_trips AS (

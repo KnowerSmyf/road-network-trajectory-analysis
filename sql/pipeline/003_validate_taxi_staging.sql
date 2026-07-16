@@ -1,7 +1,14 @@
 BEGIN;
 
-TRUNCATE TABLE staging.trip_rejections
-RESTART IDENTITY;
+DELETE FROM staging.trip_rejections
+WHERE reason IN (
+    'missing_data',
+    'missing_required_value',
+    'invalid_category',
+    'insufficient_points',
+    'insufficient_distinct_points',
+    'duplicate_trip_id'
+);
 
 -- The source dataset explicitly flags incomplete trajectories.
 INSERT INTO staging.trip_rejections (
@@ -69,7 +76,26 @@ WHERE call_type NOT IN ('A', 'B', 'C')
    OR day_type IS NULL
 ON CONFLICT (ingestion_id, reason) DO NOTHING;
 
--- Polylines must contain at least two coordinates.
+-- Polylines must contain enough distinct coordinates to form a valid LineString.
+WITH polyline_profile AS (
+    SELECT
+        raw.ingestion_id,
+        raw.trip_id,
+        jsonb_array_length(raw.polyline_raw::jsonb) AS point_count,
+        distinct_points.distinct_point_count
+    FROM staging.taxi_trips_raw AS raw
+    CROSS JOIN LATERAL (
+        SELECT count(*) AS distinct_point_count
+        FROM (
+            SELECT DISTINCT
+                point.value ->> 0 AS longitude,
+                point.value ->> 1 AS latitude
+            FROM jsonb_array_elements(raw.polyline_raw::jsonb) AS point(value)
+        ) AS coordinates
+    ) AS distinct_points
+    WHERE raw.polyline_raw IS NOT NULL
+      AND jsonb_typeof(raw.polyline_raw::jsonb) = 'array'
+)
 INSERT INTO staging.trip_rejections (
     ingestion_id,
     trip_id,
@@ -79,14 +105,20 @@ INSERT INTO staging.trip_rejections (
 SELECT
     ingestion_id,
     trip_id,
-    'insufficient_points',
+    CASE
+        WHEN point_count < 2 THEN 'insufficient_points'
+        ELSE 'insufficient_distinct_points'
+    END AS reason,
     jsonb_build_object(
-        'point_count',
-        jsonb_array_length(polyline_raw::jsonb)
+        'point_count', point_count,
+        'distinct_point_count', distinct_point_count
     )
-FROM staging.taxi_trips_raw
-WHERE polyline_raw IS NOT NULL
-  AND jsonb_array_length(polyline_raw::jsonb) < 2
+FROM polyline_profile
+WHERE point_count < 2
+   OR (
+       point_count >= 2
+       AND distinct_point_count < 2
+   )
 ON CONFLICT (ingestion_id, reason) DO NOTHING;
 
 -- Duplicate source trip IDs are rejected as ambiguous.
