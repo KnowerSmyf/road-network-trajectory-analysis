@@ -23,3 +23,9 @@ archive/*
 
 # macOS
 .DS_Store
+
+# OSMnx Artifacts
+cache/*
+
+# Local scratchpad for me
+plan

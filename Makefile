@@ -51,7 +51,9 @@ PYTHON_ENV := PYTHONPATH=src:.
 	validate-taxi-velocity-full \
 	merge-velocity-rejections \
 	summarise-taxi-full \
-	check-taxi-full
+	check-taxi-full \
+	fetch-osm-network \
+	export-porto-region
 
 
 help:
@@ -94,6 +96,10 @@ help:
 	@echo "  make merge-velocity-rejections     Merge velocity results into PostgreSQL"
 	@echo "  make summarise-taxi-full           Print full-pipeline counts and statistics"
 	@echo "  make check-taxi-full               Run the complete full-data taxi pipeline"
+	@echo ""
+	@echo "OSM Network Ingestion"
+	@echo "  fetch-osm-network:               	Fetch Porto OSM road graph and fuel stations" 
+	@echo "  export-porto-region:               Export the convex hull bounding the taxi trips" 
 
 db-up:
 	docker compose up -d
@@ -437,3 +443,19 @@ check-taxi-full:
 	$(MAKE) test-core-trips
 	$(MAKE) summarise-taxi-full
 	@echo "Full taxi ingestion and validation pipeline completed successfully."
+
+
+fetch-osm-network:
+	PYTHONPATH=src:. .venv/bin/python scripts/fetch_osm_network.py
+
+
+export-porto-region:
+	mkdir -p config
+	docker compose exec -T db \
+		psql \
+		-qAt \
+		-U road_user \
+		-d road_analysis \
+		< sql/exports/export_porto_region_geojson.sql \
+		> config/porto_region.geojson
+	python -m json.tool config/porto_region.geojson > /tmp/porto_region.pretty.json

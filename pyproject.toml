@@ -9,6 +9,10 @@ description = "Network-aware analysis of Porto taxi trajectories using PostGIS a
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "numpy>=2.0,<3.0",
+    "osmnx",
+    "geopandas",
+    "shapely",
+    "pyogrio",
 ]
 
 [project.optional-dependencies]
